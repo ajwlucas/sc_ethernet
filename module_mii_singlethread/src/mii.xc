@@ -15,7 +15,6 @@
 #define NOSMIOROTHERTHINGS
 
 #include <xs1.h>
-#include <stdio.h>
 #include <xclib.h>
 #include "mii.h"
 #include "smi.h"
@@ -30,9 +29,6 @@
 
 #include "miiClient.h"
 
-int systemBuffers[SYSTEM_BUFFER_SIZE]; // Communicate between mii HW thread and mii Interrupt routine.
-int userBuffers[USER_BUFFER_SIZE]; // Communicate between mii Interrupt routine and IP stack
-int userBufferLengths[USER_BUFFER_SIZE]; // Communicate between mii Interrupt routine and IP stack
 int globalOffset;
 
 int enableMacFilter = 0;
@@ -40,18 +36,18 @@ unsigned char filterMacAddress[6] = {0,0,0,0,0,0};
 
 // XC-2 Port mappings
 
-#ifdef anXC2
+#ifndef aSIMULTATION
 
 #define CLK_MII_RX XS1_CLKBLK_1
 #define CLK_MII_TX XS1_CLKBLK_2
 
-#define PORT_MII_RXCLK   XS1_PORT_1M
-#define PORT_MII_RXD     XS1_PORT_4E
-#define PORT_MII_RXDV    XS1_PORT_1N
-#define PORT_MII_TXCLK   XS1_PORT_1K
-#define PORT_MII_TXEN    XS1_PORT_1L
-#define PORT_MII_TXD     XS1_PORT_4F
-#define PORT_MII_RXER    XS1_PORT_1O
+#define PORT_MII_RXCLK   XS1_PORT_1K
+#define PORT_MII_RXD     XS1_PORT_4F
+#define PORT_MII_RXDV    XS1_PORT_1G
+#define PORT_MII_TXCLK   XS1_PORT_1H
+#define PORT_MII_TXEN    XS1_PORT_1F
+#define PORT_MII_TXD     XS1_PORT_4E
+#define PORT_MII_RXER    XS1_PORT_1L
 #define PORT_MII_FAKE    XS1_PORT_8C
 
 #else
@@ -88,21 +84,21 @@ unsigned char filterMacAddress[6] = {0,0,0,0,0,0};
 
 extern void user_trap();
 
-on stdcore[0]: clock clk_mii_ref = XS1_CLKBLK_REF;
-on stdcore[0]: clock clk_mii_rx = CLK_MII_RX;
-on stdcore[0]: clock clk_mii_tx = CLK_MII_TX;
+on stdcore[1]: clock clk_mii_ref = XS1_CLKBLK_REF;
+on stdcore[1]: clock clk_mii_rx = CLK_MII_RX;
+on stdcore[1]: clock clk_mii_tx = CLK_MII_TX;
 
-on stdcore[0]: in port p_mii_rxclk = PORT_MII_RXCLK;
-on stdcore[0]: buffered in port:32 p_mii_rxd = PORT_MII_RXD;
-on stdcore[0]: in port p_mii_rxdv = PORT_MII_RXDV;
-on stdcore[0]: in port p_mii_rxer = PORT_MII_RXER;
-on stdcore[0]: in port p_mii_txclk = PORT_MII_TXCLK;
-on stdcore[0]: buffered out port:32 p_mii_txd = PORT_MII_TXD;
-on stdcore[0]: out port p_mii_txen = PORT_MII_TXEN;
-on stdcore[0]: in port p_mii_fake = PORT_MII_FAKE;
-//on stdcore[0]: out port p_mii_txer = PORT_MII_TXER;
+on stdcore[1]: in port p_mii_rxclk = PORT_MII_RXCLK;
+on stdcore[1]: buffered in port:32 p_mii_rxd = PORT_MII_RXD;
+on stdcore[1]: in port p_mii_rxdv = PORT_MII_RXDV;
+on stdcore[1]: in port p_mii_rxer = PORT_MII_RXER;
+on stdcore[1]: in port p_mii_txclk = PORT_MII_TXCLK;
+on stdcore[1]: buffered out port:32 p_mii_txd = PORT_MII_TXD;
+on stdcore[1]: out port p_mii_txen = PORT_MII_TXEN;
+on stdcore[1]: in port p_mii_fake = PORT_MII_FAKE;
+//on stdcore[1]: out port p_mii_txer = PORT_MII_TXER;
 #ifdef SIMULATION
-on stdcore[0]: out port p_mii_txcsn = XS1_PORT_1C;
+on stdcore[1]: out port p_mii_txcsn = XS1_PORT_1C;
 #endif
 
 void mii_init()
@@ -208,53 +204,3 @@ void mii_deinit()
   set_port_use_off(p_mii_rxer);
   //  set_port_use_off(p_mii_txer);
 }
-
-void miiBufferInit(chanend c_in, int buffer[], int words) {
-    int bufferAddress, cnt = 0;
-    asm(" mov %0, %1" : "=r"(bufferAddress) : "r"(buffer));
-    globalOffset = bufferAddress;
-    for(int i = 0; i < words; i += WORDS_PER_BUFFER) {
-        if (i+WORDS_PER_BUFFER <= words) {
-            miiInPacketDone(c_in, i);
-            cnt++;
-        }
-    }
-    miiInstallHandler(c_in);
-}
-
-{int,int} miiInPacket(chanend c_in, int buffer[]) {
-    int a, b;
-//    {a,b} =miiReceiveBuffer(1); TODO
-    return {(a-globalOffset)>>2,b};
-}
-
-void miiInPacketDone(chanend c_in, int buffer) {
-//     miiReturnBufferToPool(buffer*4+globalOffset); TODO
-}
-
-void miiOutInit(chanend c_out) {
-    chkct(c_out, 1);
-}
-
-void miiOutPacket(chanend c_out, int b[], int index, int length) {
-    int a, roundedLength;
-    int oddBytes = length & 3;
-
-    asm(" mov %0, %1" : "=r"(a) : "r"(b));
-    
-    roundedLength = length >> 2;
-    b[roundedLength+1] = tailValues[oddBytes];
-    b[roundedLength] &= (1 << (oddBytes << 3)) - 1;
-    outuint(c_out, a + length - oddBytes);
-    outuint(c_out, -roundedLength);
-    outct(c_out, 1);
-    chkct(c_out, 1);
-}
-
-extern void mii(chanend c_in, chanend c_out) {
-    mii_init();
-//    smi_init();
-//    smi_config(1);
-    miiLLD(p_mii_rxd, p_mii_rxdv, p_mii_txd, c_in, c_out);
-}
-

@@ -150,13 +150,14 @@ mii_rxdv0:
     edu   res[r1]
     kret                     // Post condition: res[r0] EN,  res[r1] EN,  res[r3] EN
 
-mii_rxLastBits:   
+    .align 4                 // Pre condition:  res[r0] EN,  res[r1] EN,  res[r3] EN
+mii_rxLastBits:              // Jumped to from mii_rxd_packet - not an entry point.
     endin r11, res[r0]       // Get number of bits left
     stw   r11, r4[1]         // Save the number of bits left
     in    r11, res[r0]       // Grab them bits
-    stw   r11, r4[2]         // Save the left over 0, 8, 16, or 24 bits.
+    stw   r11, r4[0]         // Save the left over 0, 8, 16, or 24 bits.
     edu   res[r0]
-    stw   r10, r4[0]         // And save CRC
+    stw   r10, r4[2]         // And save CRC
     kret                 // Post condition: res[r0] DIS,  res[r1] DIS,  res[r3] EN
 
     .align 4                 // Pre condition:  res[r0] EN,  res[r1] EN,  res[r3] EN
@@ -194,7 +195,7 @@ stateIdle:
 
     ldw   r5, dp[p_mii_fake]    // Create interframe gap
     getts r7, res[r5]           // Get current count on fake port
-    ldc   r8, 23                // Add 23 (24 nibbles - but we will have lost 40ns)
+    ldc   r8, 90                // Add 90 (960 ns nibbles - but we will have lost 60ns)
     add   r7, r7, r8            // Then set this to the port counter
     setpt res[r5], r7           // And wait for the port to be ready.
     in    r7, res[r5]           // This should ensure the gap
@@ -203,14 +204,11 @@ stateIdle:
 outIdle:
 
     // Get a pointer to the next packet
-    ldw   r5, sp[OUTchannel]
-    outct res[r5], 1          // Request the next packet
-
-    ldw   r5, sp[OUTchannel]     
-    in    r7, res[r5]          // Read the poointer to the packet
-    in    r8, res[r5]          // And the negative length
-    chkct res[r5], 1           // Gobble up the end packet
-    ldw   r9, cp[initialCRC]
+    ldw   r9, sp[OUTchannel]
+    outct res[r9], 1          // Request the next packet
+    in    r7, res[r9]          // Read the poointer to the packet
+    in    r8, res[r9]          // And the negative length
+    chkct res[r9], 1           // Gobble up the end packet
     
     // Transmitting the preamble
 
@@ -218,6 +216,9 @@ outIdle:
     out   res[r2], r5
     ldw   r5, cp[DallFives]
     out   res[r2], r5
+    getts r5, res[r2]
+    out   res[r9], r5
+    ldw   r9, cp[initialCRC]
     
     // Transmitting the first word of the packet
 
@@ -232,16 +233,22 @@ outPacket:
     add   r8, r8, 1
     crc32 r9, r5, r6
     out   res[r2], r5
-    bt    r8, outPacket       // TODO: UNROLL LAST ITERATION, PUT LAST OUT IN TAIL CODE.
+    bt    r8, outPacket
 
-    ldw   r5, r7[1]
-    ldw   r7, r7[0]
+    ldw   r8, r7[r8]
+    crc32 r9, r8, r6
+
+    
+    ldw   r5, r7[2]
+    ldw   r7, r7[1]
+    out   res[r2], r8
     // Transmitting the tail of a packet
     bau   r5          // This will jump to r5
 
     .align 4
-Tail0:  
-    crc32 r9, r8, r6            // NOTE : r8 is zero, becasue the outPacket loop ended
+Tail0:
+    ldc   r8, 0
+    crc32 r9, r8, r6
     not   r9, r9
     out   res[r2], r9        
     bu    stateIdle
